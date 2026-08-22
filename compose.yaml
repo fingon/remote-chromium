@@ -1,0 +1,17 @@
+services:
+  chromium:
+    build: .
+    image: localhost/remote-chromium:trixie
+    container_name: remote-chromium
+    restart: unless-stopped
+    shm_size: 2g
+    environment:
+      VNC_PASSWORD: ${VNC_PASSWORD:?set VNC_PASSWORD in the environment}
+      START_URL: about:blank
+    ports:
+      - "127.0.0.1:5800:6080"
+      - "127.0.0.1:9222:9222"
+      # Optional native VNC client access:
+      # - "127.0.0.1:5900:5900"
+    volumes:
+      - ./profile:/home/chromium/profile:rw
