@@ -8,6 +8,16 @@ A small Debian-based headed Chromium runtime with:
 - native VNC on port `5900`;
 - noVNC on port `6080`.
 
+## Configuration
+
+- `START_URL` — initial URL, default `about:blank`.
+- `VNC_PASSWORD` — required VNC password. The container refuses to start if it is empty.
+- `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `SCREEN_DEPTH` — virtual display dimensions.
+- `CDP_PORT` — externally published CDP port (socat listener); `CDP_INTERNAL_PORT` — Chromium's loopback CDP port.
+- `VNC_PORT`, `NOVNC_PORT` — VNC service ports.
+
+The image intentionally runs Chromium and the desktop services as the non-root `chromium` user. The profile bind mount must be writable by the container process. On SELinux systems, retain the `:Z` volume label.
+
 ## Prebuilt image from GHCR
 
 The image is built and published to GHCR automatically on every push to `main`, and rebuilt once per day so it picks up updated `debian:trixie-slim` base packages. Tags: `trixie` (current build) and `latest`.
@@ -72,11 +82,31 @@ curl http://127.0.0.1:9222/json/version
 
 If Hermes or whatever agent you use runs in another container on the same Podman network, do not publish CDP to a public interface; attach both containers to a private network and use `http://remote-chromium:9222`.
 
-## Configuration
+## Remote CDP access
 
-- `START_URL` — initial URL, default `about:blank`.
-- `VNC_PASSWORD` — required VNC password. The container refuses to start if it is empty.
-- `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `SCREEN_DEPTH` — virtual display dimensions.
-- `CDP_PORT`, `VNC_PORT`, `NOVNC_PORT` — internal service ports.
+Chromium binds its DevTools server to loopback only; since Chromium M113 the `--remote-debugging-address=0.0.0.0` flag is ignored. Inside the container, `socat` therefore forwards `0.0.0.0:9222` to Chromium's loopback port (9223), and the published host port stays bound to `127.0.0.1`.
 
-The image intentionally runs Chromium and the desktop services as the non-root `chromium` user. The profile bind mount must be writable by the container process. On SELinux systems, retain the `:Z` volume label.
+To reach CDP from another machine, tunnel over SSH:
+
+```bash
+ssh -N -L 9222:127.0.0.1:9222 user@docker-host
+# then, from the other machine:
+curl http://127.0.0.1:9222/json/version
+```
+
+Notes:
+
+- Connect by IP address or `localhost`, never by hostname: the DevTools HTTP server closes connections whose `Host:` header is not an IP or localhost ("Host header is specified and is not an IP address or localhost").
+- `--remote-allow-origins=*` is already set so browser-based WebSocket clients are accepted.
+- An exposed CDP port grants full control of the browser (navigation, page content, downloads). Do not publish it beyond loopback without an authenticated proxy or VPN in front.
+
+## Integration test
+
+```bash
+make test
+```
+
+Builds the image (if stale), starts an isolated container with a fresh temporary profile directory on an automatically chosen host port, waits for `http://127.0.0.1:<port>/json/version` to answer through the socat chain, asserts the expected in-container listeners (chromium on loopback 9223, socat on `0.0.0.0:9222`), then removes the container and the temporary profile.
+
+Overrides: `ENGINE`, `IMAGE`, `TEST_CDP_PORTS`, `WAIT_TIMEOUT_SEC`.
+

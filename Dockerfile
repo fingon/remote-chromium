@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SCREEN_HEIGHT=1080 \
     SCREEN_DEPTH=24 \
     CDP_PORT=9222 \
+    CDP_INTERNAL_PORT=9223 \
     VNC_PORT=5900 \
     NOVNC_PORT=6080
 
@@ -21,6 +22,7 @@ RUN apt-get update \
         novnc \
         websockify \
         supervisor \
+        socat \
         dumb-init \
         dbus-x11 \
         ca-certificates \
