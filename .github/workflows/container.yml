@@ -51,7 +51,7 @@ jobs:
         id: meta
         run: |
           digest="$(skopeo inspect docker://debian:trixie-slim --format '{{.Digest}}')"
-          echo "key=${digest//:/_}-${{ hashFiles('Dockerfile', 'entrypoint.sh', 'start-chromium.sh', 'supervisord.conf') }}" >> "$GITHUB_OUTPUT"
+          echo "key=${digest//:/_}-${{ hashFiles('Dockerfile', 'entrypoint.sh', 'start-chromium.sh', 'supervisord.conf', 'cdp-proxy/**') }}" >> "$GITHUB_OUTPUT"
 
       - name: Restore built-image cache
         uses: actions/cache@v6

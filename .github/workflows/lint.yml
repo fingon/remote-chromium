@@ -23,7 +23,12 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: stable
-          cache-dependency-path: .pre-commit-config.yaml
+          cache-dependency-path: |
+            .pre-commit-config.yaml
+            cdp-proxy/go.sum
+
+      - name: Go vet and test
+        run: make proxy-vet proxy-test
 
       - name: Cache prek environments
         uses: actions/cache@v6

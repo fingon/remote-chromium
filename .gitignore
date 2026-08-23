@@ -1,2 +1,4 @@
 profile/
 .itest-profile.*
+.opencode/
+log.txt

@@ -1,3 +1,10 @@
+FROM golang:1.26-alpine AS cdp-proxy-build
+WORKDIR /src
+COPY cdp-proxy/go.mod cdp-proxy/go.sum ./
+RUN go mod download
+COPY cdp-proxy/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cdp-proxy .
+
 FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -22,7 +29,6 @@ RUN apt-get update \
         novnc \
         websockify \
         supervisor \
-        socat \
         dumb-init \
         dbus-x11 \
         ca-certificates \
@@ -37,6 +43,7 @@ RUN apt-get update \
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=0755 start-chromium.sh /usr/local/bin/start-chromium.sh
+COPY --from=cdp-proxy-build --chmod=0755 /out/cdp-proxy /usr/local/bin/cdp-proxy
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 
 USER chromium

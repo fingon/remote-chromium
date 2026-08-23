@@ -83,11 +83,10 @@ dump_diagnostics() {
         curl -sv --max-time 3 "http://127.0.0.1:${CDP_HOST_PORT}/json/version" 2>&1 | tail -25 || true
         echo "--- profile directory ---"
         ls -la "$PROFILE_DIR" 2>&1 || true
-        echo "--- socat stderr (last 40) ---"
-        "$ENGINE" exec "$CONTAINER_NAME" bash -c 'tail -40 /tmp/supervisor/socat-cdp.err 2>/dev/null' || true
-        echo "--- container logs minus socat noise (last 400) ---"
-        "$ENGINE" logs --tail 400 "$CONTAINER_NAME" 2>&1 |
-            grep -vE 'socat\[[0-9]+\] [WE] ' || true
+        echo "--- cdp-proxy stderr (last 40) ---"
+        "$ENGINE" exec "$CONTAINER_NAME" bash -c 'tail -40 /tmp/supervisor/cdp-proxy.err 2>/dev/null' || true
+        echo "--- container logs (last 400) ---"
+        "$ENGINE" logs --tail 400 "$CONTAINER_NAME" 2>&1 || true
     } >"$target" 2>&1
     if [[ -n "$DIAG_DIR" ]]; then
         cat "$target" >&2
@@ -176,11 +175,21 @@ log "CDP answered: $(printf '%s' "$version_json" | tr -d '\n')"
 printf '%s' "$version_json" | grep -q '"Browser":' ||
     die "unexpected /json/version payload: $version_json"
 
-log "asserting in-container listeners: chromium 127.0.0.1:${CDP_INTERNAL_PORT}, socat 0.0.0.0:${CDP_PORT}"
-listeners="$("$ENGINE" exec "$CONTAINER_NAME" cat /proc/net/tcp | awk '$4=="0A" {printf "%s ", $2}')"
+log "asserting in-container listeners: chromium 127.0.0.1:${CDP_INTERNAL_PORT}, cdp-proxy 0.0.0.0:${CDP_PORT}"
+# Go's ":port" listener is a dual-stack [::] socket: it shows up only in the
+# tcp6 table (32-digit hex addresses) while still accepting IPv4 connections.
+listeners="$("$ENGINE" exec "$CONTAINER_NAME" cat /proc/net/tcp /proc/net/tcp6 | awk '$4=="0A" {printf "%s ", $2}')"
 has_listener() { [[ " $listeners " == *" $1 "* ]]; }
 has_listener "0100007F:2407" || die "chromium not listening on 127.0.0.1:9223; listeners: $listeners"
-has_listener "00000000:2406" || die "socat not listening on 0.0.0.0:9222; listeners: $listeners"
+has_listener "00000000000000000000000000000000:2406" || die "cdp-proxy not listening on [::]:9222; listeners: $listeners"
+
+log "asserting hostname Host-header access and webSocketDebuggerUrl rewrite through cdp-proxy"
+host_version_json="$(curl -fsS --max-time 3 -H 'Host: fw.lan.example' \
+    "http://127.0.0.1:${CDP_HOST_PORT}/json/version")" ||
+    die "devtools endpoint rejected non-IP Host header (cdp-proxy not rewriting?)"
+printf '%s' "$host_version_json" | grep -Eq '"webSocketDebuggerUrl":[[:space:]]*"ws://fw\.lan\.example/' ||
+    die "webSocketDebuggerUrl not rewritten to request host: $host_version_json"
+log "hostname Host header accepted, URLs rewritten: $(printf '%s' "$host_version_json" | tr -d '\n')"
 
 [[ -n "$(ls -A "$PROFILE_DIR" 2>/dev/null)" ]] ||
     die "temporary profile directory was never populated by chromium"

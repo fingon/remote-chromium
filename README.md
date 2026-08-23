@@ -16,13 +16,17 @@ A small Debian-based headed Chromium runtime with:
   to start if it is empty.
 - `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `SCREEN_DEPTH` — virtual display
   dimensions.
-- `CDP_PORT` — externally published CDP port (socat listener).
+- `CDP_PORT` — externally published CDP port (cdp-proxy listener).
 - `CDP_INTERNAL_PORT` — Chromium's loopback CDP port.
 - `VNC_PORT`, `NOVNC_PORT` — VNC service ports.
 
 The image intentionally runs Chromium and the desktop services as the
 non-root `chromium` user. The profile bind mount must be writable by the
 container process. On SELinux systems, retain the `:Z` volume label.
+Because the container hostname changes on every recreate, stale Chromium
+`Singleton*` profile locks are wiped on startup; otherwise a forcibly
+restarted container would refuse to start ("profile appears to be in use
+by another Chromium process ... on another computer").
 
 ## Prebuilt image from GHCR
 
@@ -98,10 +102,20 @@ containers to a private network and use `http://remote-chromium:9222`.
 ## Remote CDP access
 
 Chromium binds its DevTools server to loopback only; since Chromium M113
-the `--remote-debugging-address=0.0.0.0` flag is ignored. Inside the
-container, `socat` therefore forwards `0.0.0.0:9222` to Chromium's
-loopback port (9223), and the published host port stays bound to
-`127.0.0.1`.
+the `--remote-debugging-address=0.0.0.0` flag is ignored, and since M66
+the DevTools HTTP endpoint also rejects requests whose `Host:` header is
+not an IP address or localhost (anti-DNS-rebinding). Inside the
+container, `cdp-proxy` therefore forwards `0.0.0.0:9222` to Chromium's
+loopback port (9223) while rewriting the `Host:` header to the loopback
+upstream, and points `webSocketDebuggerUrl` in discovery responses back
+at the host the client used — so connecting by hostname works end to
+end:
+
+```bash
+curl http://fw.lan:9222/json/version   # works; Host header rewritten in-container
+```
+
+The published host port stays bound to `127.0.0.1`.
 
 To reach CDP from another machine, tunnel over SSH:
 
@@ -113,12 +127,11 @@ curl http://127.0.0.1:9222/json/version
 
 Notes:
 
-- Connect by IP address or `localhost`, never by hostname: the DevTools
-  HTTP server closes connections whose `Host:` header is not an IP or
-  localhost ("Host header is specified and is not an IP address or
-  localhost").
 - `--remote-allow-origins=*` is already set so browser-based WebSocket
   clients are accepted.
+- Discovery bodies are rewritten textually: a page URL or title that
+  literally contains the internal `127.0.0.1:<CDP_INTERNAL_PORT>` string
+  would appear rewritten too.
 - An exposed CDP port grants full control of the browser (navigation,
   page content, downloads). Do not publish it beyond loopback without an
   authenticated proxy or VPN in front.
@@ -131,10 +144,11 @@ make test
 
 Builds the image (if stale), starts an isolated container with a fresh
 temporary profile directory on an automatically chosen host port, waits
-for `http://127.0.0.1:<port>/json/version` to answer through the socat
-chain, asserts the expected in-container listeners (chromium on loopback
-9223, socat on `0.0.0.0:9222`), then removes the container and the
-temporary profile.
+for `http://127.0.0.1:<port>/json/version` to answer through the
+cdp-proxy chain, asserts the expected in-container listeners (chromium on
+loopback 9223, cdp-proxy on `0.0.0.0:9222`), verifies hostname-style
+`Host:` headers are accepted with URLs rewritten to the requested host,
+then removes the container and the temporary profile.
 
 Overrides: `ENGINE`, `IMAGE`, `TEST_CDP_PORTS`, `WAIT_TIMEOUT_SEC`.
 Set `ITEST_DEBUG=1` for shell tracing; failures print a diagnostics
