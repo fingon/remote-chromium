@@ -36,6 +36,11 @@ DIAG_DIR="${ITEST_DIAG_DIR:-}"
 DUMPED=0
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE_DIR="$(mktemp -d "$REPO_ROOT/.itest-profile.XXXXXX")"
+# Rootless podman maps container uid 1000 (chromium) into a subuid range,
+# so a dir owned by the invoking user would be read-only inside the
+# container (SingletonLock failure, chromium exits 21). The dir is a
+# freshly created throwaway, so world-writable is fine here.
+chmod 0777 "$PROFILE_DIR"
 
 log() { printf '[itest] %s\n' "$*"; }
 
