@@ -18,12 +18,15 @@ set -euo pipefail
 
 ENGINE="${ENGINE:-podman}"
 IMAGE="${IMAGE:-localhost/hermes-chromium:trixie}"
-read -ra CANDIDATE_PORTS <<< "${TEST_CDP_PORTS:-19222 29222 39222}"
+read -ra CANDIDATE_PORTS <<<"${TEST_CDP_PORTS:-19222 29222 39222}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-120}"
 CONTAINER_NAME="remote-chromium-itest"
 
 log() { printf '[itest] %s\n' "$*"; }
-die() { printf '[itest] FAIL: %s\n' "$*" >&2; exit 1; }
+die() {
+    printf '[itest] FAIL: %s\n' "$*" >&2
+    exit 1
+}
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE_DIR="$(mktemp -d "$REPO_ROOT/.itest-profile.XXXXXX")"
@@ -45,7 +48,10 @@ port_free() {
 
 CDP_HOST_PORT=""
 for p in "${CANDIDATE_PORTS[@]}"; do
-    if port_free "$p"; then CDP_HOST_PORT="$p"; break; fi
+    if port_free "$p"; then
+        CDP_HOST_PORT="$p"
+        break
+    fi
 done
 [[ -n "$CDP_HOST_PORT" ]] || die "no free candidate host port among: ${CANDIDATE_PORTS[*]}"
 log "using host port $CDP_HOST_PORT for CDP"
@@ -73,7 +79,7 @@ deadline=$((SECONDS + WAIT_TIMEOUT_SEC))
 version_json=""
 while [[ -z "$version_json" ]]; do
     container_running || dump_logs_and_die "container exited before CDP became ready"
-    (( SECONDS < deadline )) || dump_logs_and_die "timed out waiting for CDP"
+    ((SECONDS < deadline)) || dump_logs_and_die "timed out waiting for CDP"
     version_json="$(curl -fsS --max-time 2 "http://127.0.0.1:${CDP_HOST_PORT}/json/version" 2>/dev/null || true)"
     [[ -n "$version_json" ]] || sleep 1
 done

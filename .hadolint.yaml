@@ -1,0 +1,3 @@
+ignored:
+  - DL3008 # rolling Debian base image; package versions come from the distro snapshot
+  - DL3066 # named 'chromium' user is created within this same Dockerfile
