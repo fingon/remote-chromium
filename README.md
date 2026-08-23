@@ -137,6 +137,8 @@ chain, asserts the expected in-container listeners (chromium on loopback
 temporary profile.
 
 Overrides: `ENGINE`, `IMAGE`, `TEST_CDP_PORTS`, `WAIT_TIMEOUT_SEC`.
+Set `ITEST_DEBUG=1` for shell tracing; failures print a diagnostics
+bundle, and CI uploads one as the `integration-test-diagnostics` artifact.
 
 ## Linting
 

@@ -42,24 +42,90 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends podman
 
-      - name: Integration test (builds the image)
+      # Cache key includes the current Debian base digest so daily base
+      # image updates invalidate the cached build.
+      # Content key = Debian base digest + source inputs; drives the build
+      # cache, is baked into the image as an OCI label, and lets us skip
+      # pushing when an identical image is already on GHCR.
+      - name: Compute content key
+        id: meta
+        run: |
+          digest="$(skopeo inspect docker://debian:trixie-slim --format '{{.Digest}}')"
+          echo "key=${digest//:/_}-${{ hashFiles('Dockerfile', 'entrypoint.sh', 'start-chromium.sh', 'supervisord.conf') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore built-image cache
+        uses: actions/cache@v6
+        with:
+          path: ~/rc-image.tar
+          key: img-${{ steps.meta.outputs.key }}
+          restore-keys: img-${{ steps.meta.outputs.key }}-
+
+      - name: Build image unless cached
+        id: build
+        env:
+          CONTENT_KEY: ${{ steps.meta.outputs.key }}
+        run: |
+          if [[ -s "$HOME/rc-image.tar" ]]; then
+            echo "[ci] restoring cached image"
+            podman load -i "$HOME/rc-image.tar"
+          fi
+          if podman image exists localhost/hermes-chromium:trixie; then
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            echo "[ci] image present; skipping build"
+          else
+            make build
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Integration test
         env:
           ENGINE: podman
           IMAGE: localhost/hermes-chromium:trixie
-        run: make test
+          ITEST_DIAG_DIR: itest-diag
+        run: |
+          mkdir -p itest-diag
+          ./test-integration.sh
+
+      - name: Save freshly built image to cache
+        if: steps.build.outputs.built == 'true'
+        run: podman save -o "$HOME/rc-image.tar" localhost/hermes-chromium:trixie
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-diagnostics
+          path: itest-diag/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Check whether identical image is already published
+        id: fresh
+        if: steps.publish.outputs.enabled == 'true'
+        run: |
+          key="${{ steps.meta.outputs.key }}"
+          remote="$(skopeo inspect "docker://ghcr.io/${{ github.repository }}:trixie" \
+            --format '{{ index .Labels "org.opencontainers.image.content-key" }}' 2>/dev/null || true)"
+          if [[ -n "$remote" && "$remote" == "$key" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "[ci] ghcr :trixie already carries content-key $key; skipping publish"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "[ci] published content-key: '${remote:-none}'; will push $key"
+          fi
 
       - name: Tag tested image
-        if: steps.publish.outputs.enabled == 'true'
+        if: steps.publish.outputs.enabled == 'true' && steps.fresh.outputs.skip != 'true'
         run: |
           podman tag localhost/hermes-chromium:trixie "ghcr.io/${{ github.repository }}:trixie"
           podman tag localhost/hermes-chromium:trixie "ghcr.io/${{ github.repository }}:latest"
 
       - name: Log in to GHCR
-        if: steps.publish.outputs.enabled == 'true'
+        if: steps.publish.outputs.enabled == 'true' && steps.fresh.outputs.skip != 'true'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Push image
-        if: steps.publish.outputs.enabled == 'true'
+        if: steps.publish.outputs.enabled == 'true' && steps.fresh.outputs.skip != 'true'
         run: |
           podman push "ghcr.io/${{ github.repository }}:trixie"
           podman push "ghcr.io/${{ github.repository }}:latest"

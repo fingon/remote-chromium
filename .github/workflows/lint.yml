@@ -19,8 +19,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: .pre-commit-config.yaml
+
+      - name: Cache prek environments
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/prek
+          key: prek-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: prek-${{ runner.os }}-
+
       - name: Install prek
-        run: pipx install prek
+        run: pipx install prek==0.4.14
 
       - name: Run hooks
         run: prek run --all-files

@@ -42,6 +42,9 @@ COPY supervisord.conf /etc/supervisor/supervisord.conf
 USER chromium
 WORKDIR /home/chromium
 
+ARG CONTENT_KEY=""
+LABEL org.opencontainers.image.content-key="${CONTENT_KEY}"
+
 EXPOSE 5900 6080 9222
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/local/bin/entrypoint.sh"]

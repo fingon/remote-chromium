@@ -6,7 +6,7 @@ IMAGE ?= localhost/hermes-chromium:trixie
 .PHONY: build start test help
 
 build:
-	$(ENGINE) build -t $(IMAGE) .
+	$(ENGINE) build $(if $(CONTENT_KEY),--build-arg CONTENT_KEY=$(CONTENT_KEY),) -t $(IMAGE) .
 
 start:
 	$(ENGINE) compose up
