@@ -32,8 +32,8 @@ by another Chromium process ... on another computer").
 
 The image is built and published to GHCR automatically on every push to
 `main`, and rebuilt once per day so it picks up updated
-`debian:trixie-slim` base packages. Tags: `trixie` (current build) and
-`latest`.
+`debian:trixie-slim` base content and newer versions of the installed Debian
+packages. Tags: `trixie` (current build) and `latest`.
 
 ```bash
 podman pull ghcr.io/fingon/remote-chromium:trixie

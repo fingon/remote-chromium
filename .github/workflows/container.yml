@@ -42,16 +42,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends podman
 
-      # Cache key includes the current Debian base digest so daily base
-      # image updates invalidate the cached build.
-      # Content key = Debian base digest + source inputs; drives the build
-      # cache, is baked into the image as an OCI label, and lets us skip
-      # pushing when an identical image is already on GHCR.
+      # The content key combines the Debian base digest, the exact package
+      # transaction resolved against that base, and source inputs. It drives
+      # the build cache, is baked into the image as an OCI label, and lets us
+      # skip pushing when an identical image is already on GHCR.
       - name: Compute content key
         id: meta
+        env:
+          PACKAGE_MANIFEST: debian-packages.txt
         run: |
+          set -euo pipefail
           digest="$(skopeo inspect docker://debian:trixie-slim --format '{{.Digest}}')"
-          echo "key=${digest//:/_}-${{ hashFiles('Dockerfile', 'entrypoint.sh', 'start-chromium.sh', 'supervisord.conf', 'cdp-proxy/**') }}" >> "$GITHUB_OUTPUT"
+          package_plan="$(
+            podman run --rm --pull=always -i "docker.io/library/debian@${digest}" sh -ceu '
+              apt_get_plan="$(mktemp)"
+              apt-get update >/dev/null
+              xargs -r apt-get --simulate install --no-install-recommends > "$apt_get_plan"
+              sed -n "/^Inst /p" "$apt_get_plan" | LC_ALL=C sort
+            ' < "$PACKAGE_MANIFEST"
+          )"
+          if [[ -z "$package_plan" ]]; then
+            echo "[ci] Debian package transaction was empty" >&2
+            exit 1
+          fi
+          package_digest="$(printf '%s\n' "$package_plan" | sha256sum | cut -d ' ' -f1)"
+          source_digest="${{ hashFiles('Dockerfile', 'debian-packages.txt', 'entrypoint.sh', 'start-chromium.sh', 'supervisord.conf', 'cdp-proxy/**') }}"
+          echo "key=${digest//:/_}-${package_digest}-${source_digest}" >> "$GITHUB_OUTPUT"
 
       - name: Restore built-image cache
         uses: actions/cache@v6

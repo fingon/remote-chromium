@@ -19,24 +19,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     VNC_PORT=5900 \
     NOVNC_PORT=6080
 
+COPY debian-packages.txt /tmp/
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        chromium \
-        chromium-sandbox \
-        xvfb \
-        openbox \
-        x11vnc \
-        novnc \
-        websockify \
-        supervisor \
-        dumb-init \
-        dbus-x11 \
-        ca-certificates \
-        fonts-dejavu \
-        fonts-liberation \
-        fonts-noto-color-emoji \
-        xdg-utils \
+    && packages_file=/tmp/debian-packages.txt \
+    && xargs -r apt-get install -y --no-install-recommends < "$packages_file" \
     && rm -rf /var/lib/apt/lists/* \
+    && rm -f "$packages_file" \
     && useradd --create-home --home-dir /home/chromium --shell /bin/bash chromium \
     && mkdir -p /home/chromium/profile /home/chromium/.vnc /run/supervisor \
     && chown -R chromium:chromium /home/chromium /run/supervisor
