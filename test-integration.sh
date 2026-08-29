@@ -14,7 +14,7 @@
 #
 # Environment overrides:
 #   ENGINE            container engine          (default: podman)
-#   IMAGE             image to test             (default: localhost/hermes-chromium:trixie)
+#   IMAGE             image to test             (default: localhost/hermes-chromium:stable)
 #   TEST_CDP_PORTS    candidate host ports      (default: "19222 29222 39222")
 #   WAIT_TIMEOUT_SEC  CDP readiness timeout     (default: 120)
 #   ITEST_DEBUG       1 enables shell tracing   (default: 0)
@@ -26,7 +26,7 @@ if [[ "${ITEST_DEBUG:-0}" == "1" ]]; then
 fi
 
 ENGINE="${ENGINE:-podman}"
-IMAGE="${IMAGE:-localhost/hermes-chromium:trixie}"
+IMAGE="${IMAGE:-localhost/hermes-chromium:stable}"
 read -ra CANDIDATE_PORTS <<<"${TEST_CDP_PORTS:-19222 29222 39222}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-120}"
 CONTAINER_NAME="remote-chromium-itest"

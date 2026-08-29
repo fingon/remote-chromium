@@ -1,5 +1,5 @@
 ENGINE ?= podman
-IMAGE ?= localhost/hermes-chromium:trixie
+IMAGE ?= localhost/hermes-chromium:stable
 
 .DEFAULT_GOAL := help
 

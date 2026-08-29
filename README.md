@@ -1,4 +1,4 @@
-# Debian Trixie Chromium remote browser
+# Debian Stable Chromium remote browser
 
 A small Debian-based headed Chromium runtime with:
 
@@ -32,11 +32,11 @@ by another Chromium process ... on another computer").
 
 The image is built and published to GHCR automatically on every push to
 `main`, and rebuilt once per day so it picks up updated
-`debian:trixie-slim` base content and newer versions of the installed Debian
-packages. Tags: `trixie` (current build) and `latest`.
+`debian:stable-slim` base content and newer versions of the installed Debian
+packages. Tags: `stable` (current build) and `latest`.
 
 ```bash
-podman pull ghcr.io/fingon/remote-chromium:trixie
+podman pull ghcr.io/fingon/remote-chromium:stable
 ```
 
 Run it directly:
@@ -53,7 +53,7 @@ podman run -d \
   -p 127.0.0.1:5800:6080 \
   -p 127.0.0.1:9222:9222 \
   -v "$PWD/profile:/home/chromium/profile:Z" \
-  ghcr.io/fingon/remote-chromium:trixie
+  ghcr.io/fingon/remote-chromium:stable
 ```
 
 To keep up with daily rebuilds, pull again periodically and recreate the
@@ -65,7 +65,7 @@ Direct Podman usage:
 
 ```bash
 mkdir -p profile
-podman build -t localhost/remote-chromium:trixie .
+podman build -t localhost/remote-chromium:stable .
 export VNC_PASSWORD='use-a-real-password'
 podman run -d \
   --name remote-chromium \
@@ -76,7 +76,7 @@ podman run -d \
   -p 127.0.0.1:5800:6080 \
   -p 127.0.0.1:9222:9222 \
   -v "$PWD/profile:/home/chromium/profile:Z" \
-  localhost/remote-chromium:trixie
+  localhost/remote-chromium:stable
 ```
 
 If the Podman Compose plugin is installed:

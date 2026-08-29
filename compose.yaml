@@ -1,7 +1,7 @@
 services:
   chromium:
     build: .
-    image: localhost/remote-chromium:trixie
+    image: localhost/remote-chromium:stable
     container_name: remote-chromium
     restart: unless-stopped
     shm_size: 2g

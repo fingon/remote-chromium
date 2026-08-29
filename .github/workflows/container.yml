@@ -52,7 +52,7 @@ jobs:
           PACKAGE_MANIFEST: debian-packages.txt
         run: |
           set -euo pipefail
-          digest="$(skopeo inspect docker://debian:trixie-slim --format '{{.Digest}}')"
+          digest="$(skopeo inspect docker://debian:stable-slim --format '{{.Digest}}')"
           package_plan="$(
             podman run --rm --pull=always -i "docker.io/library/debian@${digest}" sh -ceu '
               apt_get_plan="$(mktemp)"
@@ -85,7 +85,7 @@ jobs:
             echo "[ci] restoring cached image"
             podman load -i "$HOME/rc-image.tar"
           fi
-          if podman image exists localhost/hermes-chromium:trixie; then
+          if podman image exists localhost/hermes-chromium:stable; then
             echo "built=false" >> "$GITHUB_OUTPUT"
             echo "[ci] image present; skipping build"
           else
@@ -96,7 +96,7 @@ jobs:
       - name: Integration test
         env:
           ENGINE: podman
-          IMAGE: localhost/hermes-chromium:trixie
+          IMAGE: localhost/hermes-chromium:stable
           ITEST_DIAG_DIR: itest-diag
         run: |
           mkdir -p itest-diag
@@ -104,7 +104,7 @@ jobs:
 
       - name: Save freshly built image to cache
         if: steps.build.outputs.built == 'true'
-        run: podman save -o "$HOME/rc-image.tar" localhost/hermes-chromium:trixie
+        run: podman save -o "$HOME/rc-image.tar" localhost/hermes-chromium:stable
 
       - name: Upload failure diagnostics
         if: failure()
@@ -120,11 +120,11 @@ jobs:
         if: steps.publish.outputs.enabled == 'true'
         run: |
           key="${{ steps.meta.outputs.key }}"
-          remote="$(skopeo inspect "docker://ghcr.io/${{ github.repository }}:trixie" \
+          remote="$(skopeo inspect "docker://ghcr.io/${{ github.repository }}:stable" \
             --format '{{ index .Labels "org.opencontainers.image.content-key" }}' 2>/dev/null || true)"
           if [[ -n "$remote" && "$remote" == "$key" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "[ci] ghcr :trixie already carries content-key $key; skipping publish"
+            echo "[ci] ghcr :stable already carries content-key $key; skipping publish"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "[ci] published content-key: '${remote:-none}'; will push $key"
@@ -133,8 +133,8 @@ jobs:
       - name: Tag tested image
         if: steps.publish.outputs.enabled == 'true' && steps.fresh.outputs.skip != 'true'
         run: |
-          podman tag localhost/hermes-chromium:trixie "ghcr.io/${{ github.repository }}:trixie"
-          podman tag localhost/hermes-chromium:trixie "ghcr.io/${{ github.repository }}:latest"
+          podman tag localhost/hermes-chromium:stable "ghcr.io/${{ github.repository }}:stable"
+          podman tag localhost/hermes-chromium:stable "ghcr.io/${{ github.repository }}:latest"
 
       - name: Log in to GHCR
         if: steps.publish.outputs.enabled == 'true' && steps.fresh.outputs.skip != 'true'
@@ -143,5 +143,5 @@ jobs:
       - name: Push image
         if: steps.publish.outputs.enabled == 'true' && steps.fresh.outputs.skip != 'true'
         run: |
-          podman push "ghcr.io/${{ github.repository }}:trixie"
+          podman push "ghcr.io/${{ github.repository }}:stable"
           podman push "ghcr.io/${{ github.repository }}:latest"

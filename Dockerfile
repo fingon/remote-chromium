@@ -5,7 +5,7 @@ RUN go mod download
 COPY cdp-proxy/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cdp-proxy .
 
-FROM debian:trixie-slim
+FROM debian:stable-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
