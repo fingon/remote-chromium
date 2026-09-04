@@ -28,6 +28,29 @@ Because the container hostname changes on every recreate, stale Chromium
 restarted container would refuse to start ("profile appears to be in use
 by another Chromium process ... on another computer").
 
+### Rootless Podman bind-mount ownership
+
+The `chromium` user has UID and GID 1000 inside the image. With rootless
+Podman, use `--userns=keep-id:uid=1000,gid=1000` to map the user invoking
+Podman to that account. Files Chromium creates in the profile bind mount then
+remain owned by the invoking user on the host, regardless of the host user's
+numeric UID and GID.
+
+The same mapping applies to any other writable bind mount. For example, add
+`-v "$PWD/workdir:/workdir:Z"` after creating `workdir` on the host. Do not
+add the `:U` volume option: it recursively changes ownership of the host
+directory instead of preserving the invoking user's ownership. A
+world-writable directory is not required.
+
+Confirm the numeric ownership from the host with:
+
+```bash
+ls -lnd profile
+```
+
+Run the same command for any other bind-mounted host directory, such as
+`workdir`.
+
 ## Prebuilt image from GHCR
 
 The image is built and published to GHCR automatically on every push to
@@ -47,7 +70,7 @@ export VNC_PASSWORD='use-a-real-password'
 podman run -d \
   --name remote-chromium \
   --restart=unless-stopped \
-  --userns=keep-id \
+  --userns=keep-id:uid=1000,gid=1000 \
   --shm-size=2g \
   -e VNC_PASSWORD \
   -p 127.0.0.1:5800:6080 \
@@ -70,7 +93,7 @@ export VNC_PASSWORD='use-a-real-password'
 podman run -d \
   --name remote-chromium \
   --restart=unless-stopped \
-  --userns=keep-id \
+  --userns=keep-id:uid=1000,gid=1000 \
   --shm-size=2g \
   -e VNC_PASSWORD \
   -p 127.0.0.1:5800:6080 \

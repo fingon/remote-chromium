@@ -34,13 +34,10 @@ CDP_PORT="${CDP_PORT:-9222}"
 CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT:-9223}"
 DIAG_DIR="${ITEST_DIAG_DIR:-}"
 DUMPED=0
+HOST_UID="$(id -u)"
+USERNS_MODE="keep-id:uid=1000,gid=1000"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE_DIR="$(mktemp -d "$REPO_ROOT/.itest-profile.XXXXXX")"
-# Rootless podman maps container uid 1000 (chromium) into a subuid range,
-# so a dir owned by the invoking user would be read-only inside the
-# container (SingletonLock failure, chromium exits 21). The dir is a
-# freshly created throwaway, so world-writable is fine here.
-chmod 0777 "$PROFILE_DIR"
 
 log() { printf '[itest] %s\n' "$*"; }
 
@@ -145,6 +142,7 @@ log "using host port $CDP_HOST_PORT for CDP"
 
 log "starting container from $IMAGE with temp profile $PROFILE_DIR"
 "$ENGINE" run -d --replace --name "$CONTAINER_NAME" \
+    --userns="$USERNS_MODE" \
     --shm-size=512m \
     -e VNC_PASSWORD=itest-not-secret \
     -e START_URL=about:blank \
@@ -193,5 +191,9 @@ log "hostname Host header accepted, URLs rewritten: $(printf '%s' "$host_version
 
 [[ -n "$(ls -A "$PROFILE_DIR" 2>/dev/null)" ]] ||
     die "temporary profile directory was never populated by chromium"
+mismatched_owner="$(find "$PROFILE_DIR" -mindepth 1 ! -user "$HOST_UID" -print -quit)"
+[[ -z "$mismatched_owner" ]] ||
+    die "profile entry is not owned by host uid ${HOST_UID}: ${mismatched_owner}"
+log "profile contents remain owned by host uid $HOST_UID"
 
 log "PASS: host->socat->chromium CDP chain verified; cleaning up"

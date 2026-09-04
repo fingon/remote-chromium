@@ -4,6 +4,7 @@ services:
     image: localhost/remote-chromium:stable
     container_name: remote-chromium
     restart: unless-stopped
+    userns_mode: "keep-id:uid=1000,gid=1000"
     shm_size: 2g
     environment:
       VNC_PASSWORD: ${VNC_PASSWORD:?set VNC_PASSWORD in the environment}
@@ -14,4 +15,6 @@ services:
       # Optional native VNC client access:
       # - "127.0.0.1:5900:5900"
     volumes:
-      - ./profile:/home/chromium/profile:rw
+      - ./profile:/home/chromium/profile:rw,Z
+      # Optional writable work directory:
+      # - ./workdir:/workdir:rw,Z
