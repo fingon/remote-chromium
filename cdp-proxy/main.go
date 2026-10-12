@@ -15,10 +15,23 @@ import (
 	"github.com/alecthomas/kong"
 )
 
+const (
+	defaultIdleTimeout = 15 * time.Minute
+	serverTimeout      = 5 * time.Second
+)
+
 type cli struct {
-	Listen   string `help:"Listen address; a bare port becomes ':<port>'." env:"CDP_PORT" default:"9222"`
-	Upstream string `help:"Upstream chromium DevTools host:port; a bare port becomes '127.0.0.1:<port>'." env:"CDP_INTERNAL_PORT" default:"9223"`
-	Verbose  bool   `help:"Enable debug logging." short:"v"`
+	Listen      string        `help:"Listen address; a bare port becomes ':<port>'." env:"CDP_PORT" default:"9222"`
+	Upstream    string        `help:"Upstream chromium DevTools host:port; a bare port becomes '127.0.0.1:<port>'." env:"CDP_INTERNAL_PORT" default:"9223"`
+	Verbose     bool          `help:"Enable debug logging." short:"v"`
+	IdleTimeout time.Duration `help:"Restart Chromium after this much CDP inactivity, once until a new connection." env:"CDP_IDLE_TIMEOUT" default:"${defaultIdleTimeout}"`
+}
+
+func (cfg cli) Validate() error {
+	if cfg.IdleTimeout <= 0 {
+		return errors.New("idle timeout must be positive")
+	}
+	return nil
 }
 
 // normalizeListen accepts "9222", ":9222", or "host:port".
@@ -57,6 +70,9 @@ func run(cfg cli) error {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
 
 	listenAddr, err := normalizeListen(cfg.Listen)
 	if err != nil {
@@ -67,33 +83,46 @@ func run(cfg cli) error {
 		return fmt.Errorf("upstream: %w", err)
 	}
 	advertised := advertisedHost(listenAddr)
+	monitor := newIdleMonitor(cfg.IdleTimeout, time.Now, restartChromium)
 
 	srv := &http.Server{
 		Addr:              listenAddr,
-		Handler:           newProxyHandler(upstreamAddr, advertised),
-		ReadHeaderTimeout: 5 * time.Second,
+		Handler:           newProxyHandler(upstreamAddr, advertised, monitor),
+		ReadHeaderTimeout: serverTimeout,
 	}
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	monitorCtx, cancelMonitor := context.WithCancel(rootCtx)
+	defer cancelMonitor()
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		monitor.run(monitorCtx)
+	}()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 
 	slog.Info("cdp-proxy listening",
 		"addr", listenAddr,
 		"upstream_addr", upstreamAddr,
-		"advertised_host", advertised)
+		"advertised_host", advertised,
+		"idle_timeout", cfg.IdleTimeout)
 
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
+			cancelMonitor()
+			<-monitorDone
 			return fmt.Errorf("serve: %w", err)
 		}
 	case <-rootCtx.Done():
 		slog.Info("shutdown signal received")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cancelMonitor()
+	<-monitorDone
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), serverTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
@@ -104,6 +133,7 @@ func run(cfg cli) error {
 func main() {
 	var cfg cli
 	kong.Parse(&cfg,
+		kong.Vars{"defaultIdleTimeout": defaultIdleTimeout.String()},
 		kong.Name("cdp-proxy"),
 		kong.Description("Reverse proxy making chromium's loopback-only DevTools endpoint addressable by hostname."),
 		kong.UsageOnError(),

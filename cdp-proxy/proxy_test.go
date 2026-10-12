@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -55,18 +56,21 @@ func newUpstreamFixture(t *testing.T) *upstreamFixture {
 		fx.versionHits++
 		fx.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, versionBodyFmt, internal())
+		_, err := fmt.Fprintf(w, versionBodyFmt, internal())
+		assert.NilError(t, err)
 	})
 	mux.HandleFunc("/json/list", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintf(w, listBodyFmt, internal())
+		_, err := fmt.Fprintf(w, listBodyFmt, internal())
+		assert.NilError(t, err)
 	})
 	mux.HandleFunc("/devtools/app.js", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		w.Header().Set("Content-Type", "application/javascript")
-		fmt.Fprintf(w, appJSBodyFmt, internal())
+		_, err := fmt.Fprintf(w, appJSBodyFmt, internal())
+		assert.NilError(t, err)
 	})
 	mux.HandleFunc("/devtools/ws", func(w http.ResponseWriter, r *http.Request) {
 		hijacker, ok := w.(http.Hijacker)
@@ -76,7 +80,7 @@ func newUpstreamFixture(t *testing.T) *upstreamFixture {
 		}
 		conn, rw, err := hijacker.Hijack()
 		assert.NilError(t, err)
-		defer conn.Close()
+		defer closeTestResource(t, conn)
 		if buffered := rw.Reader.Buffered(); buffered > 0 {
 			_, _ = io.CopyN(io.Discard, rw.Reader, int64(buffered))
 		}
@@ -99,7 +103,7 @@ func (fx *upstreamFixture) observed() (host string, acceptEnc string) {
 
 func newProxyFixture(t *testing.T, fx *upstreamFixture, advertised string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(newProxyHandler(fx.hostPort, advertised))
+	srv := httptest.NewServer(newProxyHandler(fx.hostPort, advertised, nil))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -114,7 +118,7 @@ func getViaProxy(t *testing.T, proxyURL, path, reqHost, acceptEnc string) (*http
 	}
 	resp, err := http.DefaultClient.Do(req)
 	assert.NilError(t, err)
-	t.Cleanup(func() { resp.Body.Close() })
+	t.Cleanup(func() { closeTestResource(t, resp.Body) })
 	body, err := io.ReadAll(resp.Body)
 	assert.NilError(t, err)
 	return resp, string(body)
@@ -184,7 +188,7 @@ func TestMissingHostFallback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newUpstreamFixture(t)
-			handler := newProxyHandler(fx.hostPort, tc.advertised)
+			handler := newProxyHandler(fx.hostPort, tc.advertised, nil)
 
 			req := httptest.NewRequest(http.MethodGet, "/json/version", nil)
 			req.Host = ""
@@ -209,7 +213,7 @@ func TestWebSocketUpgradePipedThrough(t *testing.T) {
 
 	conn, err := net.Dial("tcp", strings.TrimPrefix(proxy.URL, "http://"))
 	assert.NilError(t, err)
-	defer conn.Close()
+	defer closeTestResource(t, conn)
 	assert.NilError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
 
 	request := "GET /devtools/ws HTTP/1.1\r\n" +
@@ -224,7 +228,7 @@ func TestWebSocketUpgradePipedThrough(t *testing.T) {
 	reader := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(reader, nil)
 	assert.NilError(t, err)
-	defer resp.Body.Close()
+	defer closeTestResource(t, resp.Body)
 	assert.Equal(t, resp.StatusCode, http.StatusSwitchingProtocols, "upgrade must survive the proxy")
 
 	sent := "ping-payload-123"
@@ -234,4 +238,134 @@ func TestWebSocketUpgradePipedThrough(t *testing.T) {
 	_, err = io.ReadFull(reader, echoed)
 	assert.NilError(t, err)
 	assert.Equal(t, string(echoed), sent, "upgraded connection must be a transparent pipe")
+}
+
+func openCDPConnection(t *testing.T, proxyURL string) (net.Conn, *bufio.Reader) {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxyURL, "http://"))
+	assert.NilError(t, err)
+	t.Cleanup(func() { closeTestResource(t, conn) })
+	assert.NilError(t, conn.SetDeadline(time.Now().Add(serverTimeout)))
+	req, err := http.NewRequest(http.MethodGet, proxyURL+"/devtools/ws", nil)
+	assert.NilError(t, err)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	assert.NilError(t, req.Write(conn))
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
+	assert.NilError(t, err)
+	assert.Equal(t, resp.StatusCode, http.StatusSwitchingProtocols)
+	assert.NilError(t, resp.Body.Close())
+	return conn, reader
+}
+
+func TestProxyTracksCDPActivity(t *testing.T) {
+	f := newIdleFixture(t)
+	upstream := newUpstreamFixture(t)
+	proxy := httptest.NewServer(newProxyHandler(upstream.hostPort, "", f.monitor))
+	t.Cleanup(proxy.Close)
+	conn, reader := openCDPConnection(t, proxy.URL)
+	f.clock.advance(testIdleTimeout / 2)
+	frame := clientFrame(textOpcode, []byte(testCommand), true)
+	_, err := conn.Write(frame)
+	assert.NilError(t, err)
+	echo := make([]byte, len(frame))
+	_, err = io.ReadFull(reader, echo)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, echo, frame)
+	f.checkAfter(testIdleTimeout / 2)
+	assert.Equal(t, f.restarts, 0)
+	f.checkAfter(testIdleTimeout / 2)
+	assert.Equal(t, f.restarts, 1)
+	_, err = reader.ReadByte()
+	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestDiscoveryAndFailedUpgradeDoNotRearmRestart(t *testing.T) {
+	f := newIdleFixture(t)
+	upstream := newUpstreamFixture(t)
+	proxy := httptest.NewServer(newProxyHandler(upstream.hostPort, "", f.monitor))
+	t.Cleanup(proxy.Close)
+	f.checkAfter(testIdleTimeout)
+	resp, _ := getViaProxy(t, proxy.URL, "/json/version", "localhost", "")
+	assert.Equal(t, resp.StatusCode, http.StatusOK)
+	req, err := http.NewRequest(http.MethodGet, proxy.URL+"/devtools/missing", nil)
+	assert.NilError(t, err)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	resp, err = http.DefaultClient.Do(req)
+	assert.NilError(t, err)
+	assert.NilError(t, resp.Body.Close())
+	assert.Equal(t, resp.StatusCode, http.StatusNotFound)
+	f.checkAfter(testIdleTimeout)
+	assert.Equal(t, f.restarts, 1)
+}
+
+func TestDiscoveryDoesNotPostponeRestart(t *testing.T) {
+	f := newIdleFixture(t)
+	upstream := newUpstreamFixture(t)
+	proxy := httptest.NewServer(newProxyHandler(upstream.hostPort, "", f.monitor))
+	t.Cleanup(proxy.Close)
+	f.clock.advance(testIdleTimeout / 2)
+	resp, _ := getViaProxy(t, proxy.URL, "/json/version", "localhost", "")
+	assert.Equal(t, resp.StatusCode, http.StatusOK)
+	f.checkAfter(testIdleTimeout / 2)
+	assert.Equal(t, f.restarts, 1)
+}
+
+func TestProxyRejectsUpgradeDuringRestart(t *testing.T) {
+	f := newIdleFixture(t)
+	upstream := newUpstreamFixture(t)
+	proxy := httptest.NewServer(newProxyHandler(upstream.hostPort, "", f.monitor))
+	t.Cleanup(proxy.Close)
+	f.monitor.mu.Lock()
+	f.monitor.restarting = true
+	f.monitor.mu.Unlock()
+	req, err := http.NewRequest(http.MethodGet, proxy.URL+"/devtools/ws", nil)
+	assert.NilError(t, err)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	resp, err := http.DefaultClient.Do(req)
+	assert.NilError(t, err)
+	assert.Equal(t, resp.StatusCode, http.StatusServiceUnavailable)
+	assert.NilError(t, resp.Body.Close())
+}
+
+func TestFailedClientHandshakeDoesNotCountAsConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		alreadyRestarted bool
+	}{
+		{"initial_inactivity", false},
+		{"after_idle_restart", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newIdleFixture(t)
+			if tc.alreadyRestarted {
+				f.checkAfter(testIdleTimeout)
+			}
+			noSessionSince := f.monitor.noSessionSince
+			upstream := newUpstreamFixture(t)
+			handler := newProxyHandler(upstream.hostPort, "", f.monitor)
+			f.clock.advance(testIdleTimeout / 2)
+			req := httptest.NewRequest(http.MethodGet, "/devtools/ws", nil)
+			req.Header.Set("Upgrade", "websocket")
+			req.Header.Set("Connection", "Upgrade")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			assert.Equal(t, response.Code, http.StatusBadGateway)
+			assert.Equal(t, len(f.monitor.sessions), 0)
+			assert.Equal(t, f.monitor.eligible, !tc.alreadyRestarted)
+			assert.Equal(t, f.monitor.noSessionSince, noSessionSince)
+			f.checkAfter(testIdleTimeout / 2)
+			assert.Equal(t, f.restarts, 1)
+		})
+	}
+}
+
+func closeTestResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		t.Errorf("close test resource: %v", err)
+	}
 }

@@ -18,6 +18,8 @@ A small Debian-based headed Chromium runtime with:
   dimensions.
 - `CDP_PORT` — externally published CDP port (cdp-proxy listener).
 - `CDP_INTERNAL_PORT` — Chromium's loopback CDP port.
+- `CDP_IDLE_TIMEOUT` — CDP inactivity timeout, default `15m`; accepts positive
+  durations such as `30s` or `1h`. Also available as `cdp-proxy --idle-timeout`.
 - `VNC_PORT`, `NOVNC_PORT` — VNC service ports.
 
 The image intentionally runs Chromium and the desktop services as the
@@ -140,6 +142,20 @@ curl http://fw.lan:9222/json/version   # works; Host header rewritten in-contain
 
 The published host port stays bound to `127.0.0.1`.
 
+Chromium restarts after `CDP_IDLE_TIMEOUT` without a CDP WebSocket connection,
+or when every connected CDP session has been idle for that duration. A new
+connection starts its idle timer, and client data frames reset it. Browser
+events, WebSocket keepalives, HTTP discovery polling, and VNC activity do not
+reset the timer. Disconnecting the last session starts a fresh no-session timer.
+
+An idle restart closes existing CDP connections and preserves the profile;
+the proxy and desktop services keep running. Clients must reconnect after the
+restart. New CDP upgrades receive HTTP 503 while the restart is in progress.
+After a successful idle restart, Chromium will not restart again until a new
+CDP WebSocket connection is established. Failed restarts are logged and retried
+after one minute if Chromium is still idle. Restart eligibility starts enabled
+when the proxy starts.
+
 To reach CDP from another machine, tunnel over SSH:
 
 ```bash
@@ -173,7 +189,12 @@ loopback 9223, cdp-proxy on `0.0.0.0:9222`), verifies hostname-style
 `Host:` headers are accepted with URLs rewritten to the requested host,
 then removes the container and the temporary profile.
 
-Overrides: `ENGINE`, `IMAGE`, `TEST_CDP_PORTS`, `WAIT_TIMEOUT_SEC`.
+The test also uses a short CDP inactivity timeout to verify Chromium restarts,
+CDP recovery, profile preservation, suppression of repeated restarts without
+new connections, and postponement while client commands continue.
+
+Overrides: `ENGINE`, `IMAGE`, `TEST_CDP_PORTS`, `WAIT_TIMEOUT_SEC`,
+`TEST_IDLE_TIMEOUT_SEC` (default `6`).
 Set `ITEST_DEBUG=1` for shell tracing; failures print a diagnostics
 bundle, and CI uploads one as the `integration-test-diagnostics` artifact.
 
@@ -185,3 +206,7 @@ Go-built `shfmt` and `hadolint`) are provisioned by prek itself, so no
 host tooling is required. GitHub Actions run the same hooks on every push
 and PR (`lint.yml`) and run the integration test before every GHCR
 publish (`container.yml`).
+
+Use `make proxy-lint` for Go formatting and linting with golangci-lint,
+`make proxy-race` for race detection, and `make proxy-build` to check the
+standalone proxy build.

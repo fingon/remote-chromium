@@ -17,6 +17,7 @@
 #   IMAGE             image to test             (default: localhost/hermes-chromium:stable)
 #   TEST_CDP_PORTS    candidate host ports      (default: "19222 29222 39222")
 #   WAIT_TIMEOUT_SEC  CDP readiness timeout     (default: 120)
+#   TEST_IDLE_TIMEOUT_SEC  CDP inactivity timeout (default: 6)
 #   ITEST_DEBUG       1 enables shell tracing   (default: 0)
 #   ITEST_DIAG_DIR    directory for diag bundle
 
@@ -29,6 +30,7 @@ ENGINE="${ENGINE:-podman}"
 IMAGE="${IMAGE:-localhost/hermes-chromium:stable}"
 read -ra CANDIDATE_PORTS <<<"${TEST_CDP_PORTS:-19222 29222 39222}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-120}"
+TEST_IDLE_TIMEOUT_SEC="${TEST_IDLE_TIMEOUT_SEC:-6}"
 CONTAINER_NAME="remote-chromium-itest"
 CDP_PORT="${CDP_PORT:-9222}"
 CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT:-9223}"
@@ -146,6 +148,7 @@ log "starting container from $IMAGE with temp profile $PROFILE_DIR"
     --shm-size=512m \
     -e VNC_PASSWORD=itest-not-secret \
     -e START_URL=about:blank \
+    -e "CDP_IDLE_TIMEOUT=${TEST_IDLE_TIMEOUT_SEC}s" \
     -p "127.0.0.1:${CDP_HOST_PORT}:9222" \
     -v "$PROFILE_DIR:/home/chromium/profile:Z" \
     "$IMAGE" >/dev/null
@@ -195,5 +198,9 @@ mismatched_owner="$(find "$PROFILE_DIR" -mindepth 1 ! -user "$HOST_UID" -print -
 [[ -z "$mismatched_owner" ]] ||
     die "profile entry is not owned by host uid ${HOST_UID}: ${mismatched_owner}"
 log "profile contents remain owned by host uid $HOST_UID"
+
+log "testing idle Chromium restarts with a ${TEST_IDLE_TIMEOUT_SEC}s timeout"
+"$ENGINE" exec -i "$CONTAINER_NAME" python3 - "$TEST_IDLE_TIMEOUT_SEC" \
+    <"$REPO_ROOT/tests/cdp_idle.py" || die "CDP idle restart verification failed"
 
 log "PASS: host->socat->chromium CDP chain verified; cleaning up"

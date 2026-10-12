@@ -9,6 +9,7 @@ services:
     environment:
       VNC_PASSWORD: ${VNC_PASSWORD:?set VNC_PASSWORD in the environment}
       START_URL: about:blank
+      CDP_IDLE_TIMEOUT: ${CDP_IDLE_TIMEOUT:-15m}
     ports:
       - "127.0.0.1:5800:6080"
       - "127.0.0.1:9222:9222"

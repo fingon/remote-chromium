@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -10,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,8 +24,13 @@ import (
 const jsonPathPrefix = "/json"
 
 type originalHostKey struct{}
+type cdpRequestKey struct{}
 
-func newProxyHandler(loopbackDevtools, advertised string) http.Handler {
+type cdpRequestState struct {
+	connection *idleConnection
+}
+
+func newProxyHandler(loopbackDevtools, advertised string, monitor *idleMonitor) http.Handler {
 	target := &url.URL{Scheme: "http", Host: loopbackDevtools}
 	// Compression disabled so buffered /json bodies are always plain text;
 	// explicit client Accept-Encoding on other paths still passes through.
@@ -41,12 +49,57 @@ func newProxyHandler(loopbackDevtools, advertised string) http.Handler {
 		},
 		Transport:     &rewritingTransport{rt: transport, internal: loopbackDevtools},
 		FlushInterval: -1,
+		ModifyResponse: func(resp *http.Response) error {
+			if monitor == nil || resp.StatusCode != http.StatusSwitchingProtocols || !isCDPUpgrade(resp.Request) || !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") {
+				return nil
+			}
+			state, ok := resp.Request.Context().Value(cdpRequestKey{}).(*cdpRequestState)
+			if !ok {
+				return errors.New("CDP upgrade is missing request state")
+			}
+			upstream, ok := resp.Body.(io.ReadWriteCloser)
+			if !ok {
+				return errors.New("CDP upgrade body is not writable")
+			}
+			conn, err := monitor.register(upstream)
+			if err != nil {
+				return fmt.Errorf("register CDP connection: %w", err)
+			}
+			state.connection = conn
+			resp.Body = conn
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.WarnContext(r.Context(), "proxy error", "path", r.URL.Path, "err", err)
+			if errors.Is(err, errBrowserRestarting) {
+				http.Error(w, errBrowserRestarting.Error(), http.StatusServiceUnavailable)
+				return
+			}
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	}
-	return logRequests(rp)
+	return logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if monitor != nil && isCDPUpgrade(r) {
+			if monitor.unavailable() {
+				http.Error(w, errBrowserRestarting.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			state := &cdpRequestState{}
+			r = r.WithContext(context.WithValue(r.Context(), cdpRequestKey{}, state))
+			defer func() {
+				if state.connection != nil {
+					if err := state.connection.Close(); err != nil {
+						slog.WarnContext(r.Context(), "close proxied CDP connection", "path", r.URL.Path, "err", err)
+					}
+				}
+			}()
+		}
+		rp.ServeHTTP(w, r)
+	}))
+}
+
+func isCDPUpgrade(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/devtools/") && strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
 func needsBodyRewrite(path string) bool {
@@ -78,9 +131,12 @@ func (t *rewritingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 
 	bodyBytes, readErr := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	closeErr := resp.Body.Close()
 	if readErr != nil {
-		return nil, readErr
+		return nil, fmt.Errorf("read discovery response: %w", errors.Join(readErr, closeErr))
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close discovery response: %w", closeErr)
 	}
 	outBytes := bytes.ReplaceAll(bodyBytes, []byte(t.internal), []byte(host))
 	outBytes = bytes.ReplaceAll(outBytes, []byte("localhost:"+portOf(t.internal)), []byte(host))
